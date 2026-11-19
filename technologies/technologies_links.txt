@@ -7,3 +7,50 @@ https://www.vsllabs.com/
 https://x.com/zhangmao57/status/2123167150915670228
 
 https://www.kaggle.com/datasets/abd0kamel/asl-citizen
+
+=== Live ASL Captions Capstone Decision Report ===
+
+GitHub repositories and guides
+
+https://github.com/facebookresearch/ssvp_slt/blob/main/examples/sonar/README.md
+https://github.com/microsoft/ASL-citizen-code
+https://github.com/chevalierNoir/OpenASL
+https://github.com/LzDddd/AVRET
+https://github.com/facebookresearch/ssvp_slt
+https://github.com/imatge-upc/slt_how2sign_wicv2023
+https://github.com/streamsl/StreamSLST
+https://github.com/ZechengLi19/Uni-Sign
+
+Papers, datasets, products, and platform documentation
+
+https://www.microsoft.com/en-us/research/project/asl-citizen/
+https://www.sign-speak.com/for-enterprises
+https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060368
+https://www.kaggle.com/code/marcramy/notebook4c03ad85e1
+https://arxiv.org/abs/2304.05934
+https://www.microsoft.com/en-us/download/details.aspx?id=105253
+https://how2sign.github.io/
+https://arxiv.org/abs/2205.12870
+https://doi.org/10.1109/TCSVT.2024.3376404
+https://www.sign-speak.com/
+https://www.sign-speak.com/legal/privacy
+https://itsaccessibility.syr.edu/sign-speak-interpreting-service/
+https://signcaption.ai/
+https://app.theneo.io/sign-speak/sign-speak-api/offerings
+https://arxiv.org/abs/2304.06371
+https://arxiv.org/abs/2611.00055
+https://huggingface.co/ZechengLi19/Uni-Sign/tree/main
+https://www.elephantalk.com/
+https://www.curify-ai.com/tools/asl-video-translator
+https://www.signapse.ai/signstream-api
+https://www.handtalk.me/en/
+https://signs-ai.com/
+https://developers.google.com/workspace/meet/api/guides/overview
+https://developers.google.com/workspace/meet/add-ons/guides/overview
+https://support.microsoft.com/en-us/teams/meetings-events/use-cart-captions-in-a-microsoft-teams-meeting-human-generated-captions
+https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts
+https://developers.zoom.us/docs/rtms/
+https://developers.google.com/workspace/meet/release-notes
+https://learn.microsoft.com/en-us/microsoftteams/platform/bots/calls-and-meetings/requirements-considerations-application-hosted-media-bots
+https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia
+https://obsproject.com/kb/virtual-camera-guide
