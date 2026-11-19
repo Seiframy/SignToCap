@@ -1,0 +1,40 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# OS and editor files
+[Dd]esktop.ini
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+~$*
+
+# Dependencies and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+dist/
+build/
+*.log
+
+# Local data, recordings, and model artifacts
+/data/
+/datasets/
+/recordings/
+/checkpoints/
+/models/weights/
+*.pt
+*.pth
+*.onnx
+
+# Local copies of research papers
+/pappers/*.pdf
