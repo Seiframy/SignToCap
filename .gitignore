@@ -1,40 +1,77 @@
-# Local settings and credentials
+# Secrets, private identities and local credentials
 .env
 .env.*
 !.env.example
+.aws/
+.ssh/
 *.pem
 *.key
+*.ppk
+id_ed25519*
+id_rsa*
+known_hosts*
+*credentials.local*
+*.lock
+
+# Local runtimes and generated assets
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+node_modules/
+.pytest_cache/
+.handover-sync/
+*.bak
+*.part
+*.partial
+*.log
+*.zip
+*.mp4
+*.webm
+*.mov
+*.wav
+*.npz
+*.npy
+*.pkl
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.qgz
+/assets/
+/Uni-Sign/
+/pilot-data/
+/pilot-check-*/
+/signgpt-input/
+/signgpt-results/
+/phase3/audit-data/
+/phase3/warmup.jpg
+/phase3/sampling-results.jsonl
+/phase2-analysis/continuous-inputs.jsonl
+/phase2-analysis/experiment-report.html
+/phase2-analysis/phase2-results.svg
+
+# Local reports and unrelated workspace material
+/.sign-gpt-review/
+/output/
+/draft_two_animated/
+
+# Existing repository exclusions
 *.pfx
 *.p12
-
-# OS and editor files
 [Dd]esktop.ini
 Thumbs.db
 .DS_Store
 .vscode/
 .idea/
 ~$*
-
-# Dependencies and generated files
 .venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-node_modules/
 dist/
 build/
-*.log
-
-# Local data, recordings, and model artifacts
 /data/
 /datasets/
 /recordings/
 /checkpoints/
 /models/weights/
-*.pt
-*.pth
-*.onnx
-
-# Local copies of research papers
 /pappers/*.pdf

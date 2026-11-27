@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SignToCap</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><h1>SignToCap</h1><p>American Sign Language to English captions</p></div>
+      <span id="mode-label" class="mode">Recorded replay</span>
+    </header>
+    <section class="controls" aria-label="Translation controls">
+      <label>Mode <select id="mode"><option value="replay">Recorded replay</option><option value="prerecorded">Prerecorded translation</option><option value="live">Live camera</option><option value="sentence">Sign &amp; Translate</option></select></label>
+      <label id="track-label">Recording <select id="track"></select></label>
+      <label id="segment-label" hidden>Annotated sentence <select id="segment"></select></label>
+      <button id="preview" hidden>Enable camera</button>
+      <button id="start" class="primary" disabled>Start</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="commit" disabled>Commit sentence</button>
+      <button id="copy" disabled>Copy captions</button>
+    </section>
+    <p id="status" role="status">Loading replay tracks…</p>
+    <p id="prerecordedReference" hidden></p>
+    <div class="layout">
+      <section class="capture" aria-label="Capture preview">
+        <video id="recorded" playsinline muted hidden style="transform:none"></video>
+        <video id="video" autoplay playsinline muted hidden></video>
+        <div id="empty">
+          <h2 id="empty-title">Recorded replay</h2>
+          <p id="empty-text">Play the actual caption events from the Phase 2 evaluation.</p>
+        </div>
+      </section>
+      <section class="panel" aria-label="Captions">
+        <div class="caption-block"><h2>Partial caption</h2><p id="partial">—</p></div>
+        <div class="caption-block"><h2>Committed captions</h2><ol id="finals" aria-live="polite"></ol><p id="no-finals">No committed captions yet.</p></div>
+      </section>
+    </div>
+    <section id="replayTools" class="panel tools">
+      <h2>Recorded replay</h2><button id="restart">Restart</button>
+      <input id="seek" type="range" min="0" max="1" value="0" step=".01" aria-label="Replay position">
+      <output id="progress"></output>
+      <h2>Ground-truth English reference</h2><p id="reference"></p>
+      <small>Research excerpts from Duarte et al., <a href="https://how2sign.github.io/">How2Sign</a>, CVPR 2021.
+      Time-cropped playback with separate SignToCap predictions. <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>.</small>
+    </section>
+    <section class="panel tools"><h2>GPU Control Center</h2>
+      <p id="gpuStatus" role="status">GPU controls loading…</p><strong id="warning" role="alert"></strong>
+      <div class="gpuControls">
+        <button id="gpuStart" disabled>Attach &amp; Prepare GPU</button>
+        <button id="emergency" disabled>Stop GPU</button>
+        <a id="console" href="https://console.runpod.io/pods" target="_blank" rel="noopener noreferrer">RunPod console</a>
+      </div>
+      <div id="gpuConfig" hidden>
+        <p>Start one Pod in RunPod, then attach here promptly. The 15-minute limit starts when RunPod starts the Pod.</p>
+        <details id="gpuCredentials">
+          <summary>RunPod credential</summary>
+          <p>Use a key scoped to Pod read and write. The verified Pod watchdog uses it to stop your session.</p>
+          <label>Scoped API key <input id="gpuKey" type="password" autocomplete="off" spellcheck="false"></label>
+          <label><input id="gpuRemember" type="checkbox"> Save in Windows Credential Manager</label>
+          <button id="gpuAuth">Use key</button> <button id="gpuForget">Forget key</button>
+        </details>
+        <div class="gpuControls">
+          <label>Running Pod <select id="gpuPod"></select></label>
+          <button id="gpuRefresh">Refresh Pods</button>
+          <label>Container storage override ($/hour) <input id="gpuStorage" type="number" min="0.000001" step="any" placeholder="Automatic"></label>
+          <label>Spending ceiling ($/hour) <input id="gpuCeiling" type="number" min="0.000001" step="any"></label>
+        </div>
+        <p id="gpuQuote" aria-live="polite"></p>
+        <details>
+          <summary>Look up a specific existing Pod</summary>
+          <label>Pod ID <input id="gpuPodId" type="text" autocomplete="off" spellcheck="false"></label>
+          <button id="gpuLookup">Look up Pod</button>
+        </details>
+      </div>
+      <div id="gpuPin" role="dialog" aria-labelledby="gpuPinTitle" hidden>
+        <h3 id="gpuPinTitle">Verify the Pod’s SSH identity</h3>
+        <p>In the RunPod console, open the selected Pod’s web terminal. Copy and run the command below there, then paste the four output lines here.</p>
+        <pre id="gpuPinCommand"></pre>
+        <button id="gpuCopyCommand">Copy command</button>
+        <label>Web terminal output <textarea id="gpuPinOutput" rows="4" spellcheck="false"></textarea></label>
+        <button id="gpuTrust">Confirm key from RunPod web terminal</button>
+      </div>
+      <p id="metrics">Inference latency will appear during a live test.</p>
+    </section>
+    <section class="panel tools"><h2>Test Recording</h2>
+      <label><input type="checkbox" id="recordEnabled"> Record Test on start</label>
+      <button id="recordStart" disabled>Start Recording</button><button id="recordStop" disabled>Stop Recording</button>
+      <p id="recordStatus"></p><label>Saved local test <select id="saved"></select></label>
+      <video id="playback" controls hidden></video><p id="savedCaption"></p><p id="evidenceSummary"></p>
+      <button id="export" disabled>Save video and evidence files</button>
+    </section>
+    <footer><kbd>F8</kbd> starts or stops when this window has focus. <kbd>Ctrl</kbd> + <kbd>Enter</kbd> commits a live sentence.</footer>
+  </main>
+</body>
+</html>

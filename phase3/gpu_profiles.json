@@ -1,0 +1,46 @@
+[
+  {
+    "gpu": "NVIDIA L4",
+    "aliases": [
+      "NVIDIA L4",
+      "L4"
+    ],
+    "rate_cap": 0.7
+  },
+  {
+    "gpu": "NVIDIA RTX 4090",
+    "aliases": [
+      "NVIDIA RTX 4090",
+      "NVIDIA GeForce RTX 4090",
+      "GeForce RTX 4090",
+      "RTX 4090"
+    ],
+    "rate_cap": 0.9
+  },
+  {
+    "gpu": "NVIDIA L40S",
+    "aliases": [
+      "NVIDIA L40S",
+      "L40S"
+    ],
+    "rate_cap": null
+  },
+  {
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "aliases": [
+      "NVIDIA A100-SXM4-80GB",
+      "NVIDIA A100 80GB SXM",
+      "A100 SXM 80 GB"
+    ],
+    "rate_cap": null
+  },
+  {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "aliases": [
+      "H100 SXM",
+      "NVIDIA H100 80GB HBM3",
+      "NVIDIA H100 SXM"
+    ],
+    "rate_cap": null
+  }
+]

@@ -1,0 +1,2 @@
+# Isolated Linux x86_64 Python 3.12 benchmark environment.
+onnxruntime-gpu==1.20.2 --hash=sha256:aa66d2e6de13fe6f4d1554b1c219bd2e4778b540ed9d3dc62957c95a8af43d66
