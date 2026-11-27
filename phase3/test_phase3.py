@@ -157,8 +157,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_loopback_replay_and_live_guard(self):
         from desktop import PreviewServer
-        path = Path(__file__).resolve().parents[1] / (
-            "signgpt-results/20261127T062446887049Z/continuous-replay-events.jsonl")
+        path = Path(__file__).resolve().with_name("demo-replay.jsonl")
         server = PreviewServer(0, path)
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -166,8 +165,9 @@ class ControllerTests(unittest.TestCase):
             base = f"http://127.0.0.1:{server.server_port}"
             with urlopen(base + "/api/replay", timeout=3) as response:
                 tracks = json.load(response)
-            self.assertEqual(len(tracks), 2)
-            self.assertEqual(sum(e["kind"] == "partial" for track in tracks.values() for e in track), 78)
+            self.assertEqual(set(tracks), {"Illustrative caption replay"})
+            self.assertEqual([e["kind"] for e in next(iter(tracks.values()))],
+                             ["partial", "final", "partial", "final"])
             with self.assertRaises(HTTPError) as caught:
                 urlopen(Request(base + "/api/start", data=b"{}"), timeout=3)
             self.assertEqual(caught.exception.code, 409)

@@ -53,7 +53,7 @@ def load_track(path):
 class PoseExtractor:
     """Pinned RTMW whole-body extraction shared by video audit and live capture."""
 
-    def __init__(self, upstream, *, ort_threads=0, device="cpu", profile_prefix=None):
+    def __init__(self, upstream, *, ort_threads=0, device="cpu", profile_prefix=None, filter_invalid=True):
         sys.path.insert(0, str(upstream.resolve() / "demo" / "rtmlib-main"))
         from rtmlib import Wholebody
 
@@ -61,6 +61,7 @@ class PoseExtractor:
                          if ort_threads or device == "cuda" or profile_prefix else
                          Wholebody(to_openpose=False, mode="lightweight", backend="onnxruntime", device="cpu"))
         self.previous_center = None
+        self.filter_invalid = filter_invalid
 
     @staticmethod
     def configured_detector(wholebody, threads, device, profile_prefix):
@@ -131,6 +132,11 @@ class PoseExtractor:
         joints, confidence = self.detector(frame)
         joints = np.asarray(joints, dtype=np.float32).reshape(-1, 133, 2)
         confidence = np.asarray(confidence, dtype=np.float32).reshape(-1, 133)
+        # Invalid detections must not poison the shoulder center used by the next frame.
+        if self.filter_invalid:
+            valid = np.isfinite(joints).all(axis=(1, 2)) & np.isfinite(confidence).all(axis=1)
+            valid &= (confidence > 0).any(axis=1)
+            joints, confidence = joints[valid], confidence[valid]
         if not len(joints):
             return np.zeros((1, 133, 2), dtype=np.float32), np.zeros((1, 133), dtype=np.float32)
         joints = joints / np.array([width, height], dtype=np.float32)
@@ -143,53 +149,94 @@ class PoseExtractor:
         return joints[choice:choice + 1], confidence[choice:choice + 1]
 
 
+def video_metadata(capture):
+    import cv2
+
+    fps = capture.get(cv2.CAP_PROP_FPS)
+    count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
+    if not capture.isOpened() or not math.isfinite(fps) or not 0 < fps <= 240 or not math.isfinite(count) or count < 1:
+        raise ValueError("Cannot open a video with readable duration and frame rate")
+    return {"source_fps": fps, "source_frames": round(count), "duration_ms": 1000 * count / fps}
+
+
+def probe_video(args):
+    import cv2
+
+    capture = cv2.VideoCapture(str(args.video))
+    try:
+        print(json.dumps(video_metadata(capture)), flush=True)
+    finally:
+        capture.release()
+
+
 def extract_video(args, *, extractor=None):
     import cv2
     import numpy as np
 
-    if extractor is None:
-        extractor = PoseExtractor(args.upstream, ort_threads=getattr(args, "ort_threads", 0))
+    wall_start = perf_counter()
     capture = cv2.VideoCapture(str(args.video))
     try:
-        fps = capture.get(cv2.CAP_PROP_FPS)
-        if not capture.isOpened() or not np.isfinite(fps) or fps <= 0:
-            raise ValueError(f"Cannot open a constant-frame-rate video: {args.video}")
+        metadata = video_metadata(capture)
+        fps = metadata["source_fps"]
+        sampling = getattr(args, "sample_fps", None)
+        if sampling is not None and not 0 < sampling <= fps + .05:
+            raise ValueError("Choose a sampling rate no higher than the source frame rate")
+        if sampling is not None:
+            sampling = min(sampling, fps)
         first = math.floor(args.start_ms * fps / 1000)
         last = None if args.end_ms is None else math.ceil(args.end_ms * fps / 1000)
+        if getattr(args, "whole_sentence", False):
+            last = metadata["source_frames"]
+            if metadata["duration_ms"] > 60_000 or math.ceil((last - first) * (sampling or fps) / fps) > 256:
+                raise ValueError("Select one complete sentence within the 256-frame and 60-second limits")
         if first < 0 or (last is not None and last <= first):
             raise ValueError("Invalid video crop")
         if first and (not capture.set(cv2.CAP_PROP_POS_FRAMES, first)
                       or round(capture.get(cv2.CAP_PROP_POS_FRAMES)) != first):
             raise ValueError("Could not seek to the requested source frame")
-        keypoints, scores, times = [], [], []
+        if extractor is None:
+            extractor = PoseExtractor(args.upstream, ort_threads=getattr(args, "ort_threads", 0),
+                                      filter_invalid=not getattr(args, "legacy_detection", False))
+        keypoints, scores, times, timestamps = [], [], [], []
+        decoded = 0
         cadence_error = 0.0
-        while last is None or first + len(times) < last:
+        while last is None or first + decoded < last:
             ok, frame = capture.read()
             if not ok:
                 break
-            if args.verify_cadence:
+            index = decoded
+            decoded += 1
+            if args.verify_cadence or sampling is not None:
                 observed = capture.get(cv2.CAP_PROP_POS_MSEC)
-                expected = (first + len(times)) * 1000 / fps
+                expected = (first + index) * 1000 / fps
                 if not math.isfinite(observed):
                     raise ValueError("Missing decoded media timestamp")
                 cadence_error = max(cadence_error, abs(observed - expected))
+            if sampling is not None and index != math.floor(len(times) * fps / sampling):
+                continue
             started = perf_counter()
             joints, confidence = extractor.extract(frame)
+            if getattr(args, "whole_sentence", False) and not np.any(confidence > 0):
+                raise ValueError("One or more sampled frames lack a detectable signer")
             times.append((perf_counter() - started) * 1000)
+            if sampling is not None:
+                timestamps.append(observed)
             keypoints.append(joints)
             scores.append(confidence)
     finally:
         capture.release()
     if not times:
         raise ValueError(f"No decoded frames: {args.video}")
-    if last is not None and len(times) != last - first:
+    if last is not None and decoded != last - first:
         raise ValueError(f"Incomplete video crop: {args.video}")
-    if args.verify_cadence and cadence_error > 2:
+    if (args.verify_cadence or sampling is not None) and cadence_error > 2:
         raise ValueError(f"Decoded timestamps differ from fixed cadence by {cadence_error:.2f} ms")
-    save_track(args.output, keypoints, scores, fps)
+    save_track(args.output, keypoints, scores, sampling or fps)
     warm = times[min(5, len(times) - 1) :]
     metrics = {
-        "frames": len(times), "source_fps": fps, "pose_first_ms": times[0],
+        **metadata, "frames": len(times), "decoded_frames": decoded, "sample_fps": sampling or fps,
+        "frame_ms": timestamps if sampling is not None else None,
+        "extraction_ms": (perf_counter() - wall_start) * 1000, "pose_first_ms": times[0],
         "pose_p50_ms": float(np.median(warm)),
         "pose_p95_ms": float(np.percentile(warm, 95)),
         "pose_work_fps": 1000 / float(np.mean(warm)),
@@ -294,9 +341,15 @@ def main():
     video.add_argument("--start-ms", type=float, default=0)
     video.add_argument("--end-ms", type=float)
     video.add_argument("--verify-cadence", action="store_true")
+    video.add_argument("--sample-fps", type=int, choices=(6, 12, 24))
+    video.add_argument("--whole-sentence", action="store_true")
+    video.add_argument("--legacy-detection", action="store_true", help="Benchmark the previous detector selection")
     video.add_argument("--ort-threads", type=int, choices=range(0, 9), default=0,
                        help="ONNX Runtime CPU threads per model. 0 uses the runtime defaults")
     video.set_defaults(run=extract_video)
+    probe = commands.add_parser("probe")
+    probe.add_argument("video", type=Path)
+    probe.set_defaults(run=probe_video)
     oracle = commands.add_parser("oracle")
     oracle.add_argument("labels", type=Path)
     oracle.add_argument("pose_root", type=Path)

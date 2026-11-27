@@ -191,7 +191,7 @@ def serve():
         if action == "start" and model.session is None:
             guardian.stdin.write(b"test\n")
             guardian.stdin.flush()
-            model.start(req.get("mode", "live"))
+            model.start(req.get("mode", "live"), req.get("sample_fps"))
         elif action == "frame" and model.session:
             event = model.frame(base64.b64decode(req["jpeg"], validate=True), req["slot"], req.get("at_ms"))
         elif action == "frames" and model.session:
@@ -214,6 +214,7 @@ def serve():
         result = {"event": event}
         if action == "start":
             result["runtime"] = model.runtime
+            result["capture_fps"] = model.capture_fps
         if action == "frame":
             result.update(pose_ms=model.pose_ms, jpeg_ms=model.jpeg_ms, dropped=model.dropped,
                           worker_ms=(time.perf_counter() - began_request) * 1000)

@@ -351,7 +351,7 @@ class LiveManager:
                 self.request_since = time.monotonic()
                 proc = self.ssh
                 keys = {"frame": ("slot", "jpeg", "at_ms"), "frames": ("frames",),
-                        "prerecorded": ("poses",), "start": ("mode",)}.get(action, ())
+                        "prerecorded": ("poses",), "start": ("mode", "sample_fps")}.get(action, ())
                 req = {k:body[k] for k in keys if k in body}
                 proc.stdin.write(json.dumps(dict(req,action=action))+"\n")
                 proc.stdin.flush()

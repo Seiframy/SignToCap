@@ -24,7 +24,30 @@ from captions import AdaptiveStreamingSession, activity_features, repeated_phras
 BATCH_FRAMES = 3
 SENTENCE_FPS = 6
 SENTENCE_FRAMES = 48
+SENTENCE_RATES = (6, 12, 24)
+UPLOAD_LIMIT = 64 * 1024**2
 MAX_JPEG_TEXT = 250_000
+SLOT_EPSILON_MS = .001
+
+
+def pose_stage():
+    return Path(os.environ.get("SIGNTOCAP_POSE_STAGE", Path(os.environ.get("LOCALAPPDATA", "."))
+                               / "Temp/signgpt-phase2-stage"))
+
+
+def video_tool(*args, timeout=180):
+    local = pose_stage()
+    python = local / "cpu-venv/Scripts/python.exe"
+    if not python.is_file():
+        raise ValueError("Install the local SignToCap pose runtime to inspect or translate uploads")
+    env = dict(os.environ, TORCH_HOME=str(local / "ort-cache/rtmlib"))
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
+    result = subprocess.run([str(python), "-B", str(HERE.parent / "phase2/pose_data.py"), *map(str, args)],
+                            env=env, capture_output=True, timeout=timeout)
+    if result.returncode:
+        raise ValueError("Video decoding or pose extraction failed. Use a complete, constant-frame-rate clip with one visible signer.")
+    return json.loads(result.stdout.splitlines()[-1])
 
 
 def frame_requests(body):
@@ -79,6 +102,7 @@ class UniSignBackend:
                         "pose_operators": verification, "pose_fallback": cuda_reason,
                         "batch_frames": BATCH_FRAMES, "sentence_fps": SENTENCE_FPS,
                         "sentence_frames": SENTENCE_FRAMES,
+                        "sentence_rates": SENTENCE_RATES,
                         "pose_load_ms": (pose_loaded - began) * 1000,
                         "model_load_ms": (model_loaded - pose_loaded) * 1000}
         if warm_frame is not None:
@@ -89,13 +113,14 @@ class UniSignBackend:
             self.runtime["warmup_ms"] = round((time.perf_counter() - model_loaded) * 1000, 1)
         self.session = None
 
-    def start(self, mode="live"):
-        if mode not in {"live", "sentence"}:
+    def start(self, mode="live", sample_fps=None):
+        if mode not in {"live", "sentence"} or (sample_fps is not None and
+                (mode != "sentence" or type(sample_fps) is not int or sample_fps not in SENTENCE_RATES)):
             raise ValueError("Unknown capture mode")
         options = SimpleNamespace(buffer_s=10, decode_interval_ms=900, partial_tokens=24,
                                   beams=1, tokens=48, motion=.7, policy="explicit")
         self.capture_mode = mode
-        self.capture_fps = SENTENCE_FPS if mode == "sentence" else self.fps
+        self.capture_fps = (sample_fps or SENTENCE_FPS) if mode == "sentence" else self.fps
         self.session = AdaptiveStreamingSession(options, self.model, self.capture_fps)
         self.pose.previous_center = None
         self.last_slot = -1
@@ -111,9 +136,9 @@ class UniSignBackend:
         if (type(slot) is not int or not self.last_slot < slot <= 1_000_000
                 or (at_ms is not None and (type(at_ms) not in (int, float)
                                           or not 0 <= at_ms <= 60_000 or at_ms <= self.last_frame_ms
-                                          or math.floor(at_ms * self.capture_fps / 1000) != slot))):
+                                          or math.floor((at_ms + SLOT_EPSILON_MS) * self.capture_fps / 1000) != slot))):
             raise ValueError("Frame timestamps must increase")
-        if self.capture_mode == "sentence" and (at_ms is None or slot >= SENTENCE_FRAMES):
+        if self.capture_mode == "sentence" and (at_ms is None or slot >= 8 * self.capture_fps):
             raise ValueError("Sentence capture exceeds the supported window")
         before_jpeg = time.perf_counter()
         image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -242,6 +267,93 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") in {f"localhost:{self.server.server_port}",
                                             f"127.0.0.1:{self.server.server_port}"}
 
+    def upload_video(self, origin):
+        if (origin != "http://" + self.headers["Host"] or self.headers.get("X-Control") != self.server.token
+                or not self.headers.get("X-Session")):
+            return self.send(403, {"error": "Local session authorization required"})
+        size = int(self.headers.get("Content-Length", "0"))
+        if not 0 < size <= UPLOAD_LIMIT:
+            return self.send(413, {"error": "Select a video no larger than 64 MiB"})
+        name = self.headers.get("X-Video-Extension", "").lower()
+        if not re.fullmatch(r"\.[a-z0-9]{1,8}", name):
+            return self.send(400, {"error": "Choose a video file with a valid file extension"})
+        translate = self.path == "/api/upload-translate"
+        owner = self.headers["X-Session"]
+        manager = self.server.manager
+        rate = None
+        if translate:
+            rate = int(self.headers.get("X-Sample-Fps", "0"))
+            if rate not in SENTENCE_RATES:
+                raise ValueError("Choose 6, 12, or 24 FPS")
+            if not manager or manager.owner != owner or not manager.status(owner)["ready"] or manager.live:
+                raise ValueError("Attach and prepare the GPU in this tab before translating")
+            generation = manager.generation
+        if not self.server.recorded_job.acquire(blocking=False):
+            return self.send(409, {"error": "A video job is already in progress"})
+        streaming = False
+        started = time.perf_counter()
+
+        def emit(**data):
+            self.wfile.write(json.dumps(data).encode() + b"\n")
+            self.wfile.flush()
+
+        try:
+            with TemporaryDirectory(prefix="SignToCap-upload-") as folder:
+                video = Path(folder) / ("video" + name)
+                timeout = self.connection.gettimeout()
+                self.connection.settimeout(10)
+                try:
+                    with video.open("wb") as out:
+                        remaining = size
+                        while remaining:
+                            block = self.rfile.read1(min(remaining, 256 * 1024))
+                            if not block or time.perf_counter() - started > 30:
+                                raise ValueError("Video upload was incomplete or timed out")
+                            out.write(block)
+                            remaining -= len(block)
+                finally:
+                    self.connection.settimeout(timeout)
+                metadata = video_tool("probe", video, timeout=15)
+                if not translate:
+                    return self.send(200, {"video": metadata})
+                fps = metadata["source_fps"]
+                if rate > fps + .05:
+                    raise ValueError("Choose a sampling rate no higher than the source FPS")
+                if metadata["duration_ms"] > 60_000 or math.ceil(metadata["source_frames"] * min(rate, fps) / fps) > 256:
+                    raise ValueError("Choose a shorter complete sentence or a lower rate. Limit: 256 sampled frames and 60 seconds.")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                streaming = True
+                emit(stage="extracting", video=metadata)
+                pose = Path(folder) / "sentence.npz"
+                metrics = video_tool("video", pose_stage() / "Uni-Sign", video, pose, "--sample-fps", rate,
+                                     "--verify-cadence", "--whole-sentence", "--ort-threads", 2)
+                emit(stage="translating")
+                payload = base64.b64encode(pose.read_bytes()).decode("ascii")
+                result = manager.infer(owner, "prerecorded", {"poses": payload, "generation": generation})
+                if result.get("error"):
+                    raise ValueError(result["error"])
+                if not isinstance(result.get("event"), dict):
+                    raise ValueError("The guarded worker returned no translation result")
+                emit(stage="complete", event=result["event"], pose=metrics,
+                     elapsed_ms=(time.perf_counter() - started) * 1000)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except (ValueError, OSError, subprocess.SubprocessError, RuntimeError) as error:
+            detail = str(error) if isinstance(error, ValueError) else "Video processing failed or timed out"
+            if streaming:
+                try:
+                    emit(error=detail)
+                except ConnectionError:
+                    pass
+            else:
+                return self.send(400, {"error": detail})
+        finally:
+            self.server.recorded_job.release()
+
     def translate_video(self, owner, body):
         manager = self.server.manager
         gpu = manager.status(owner)
@@ -263,24 +375,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.recorded_job.acquire(blocking=False):
             raise ValueError("A prerecorded sentence is already being processed")
         try:
-            local = Path(os.environ["LOCALAPPDATA"]) / "Temp/signgpt-phase2-stage"
-            python = local / "cpu-venv/Scripts/python.exe"
-            upstream = local / "Uni-Sign"
-            if not python.is_file() or not upstream.is_dir():
-                raise ValueError("The local SignToCap pose runtime is unavailable")
-            env = dict(os.environ, TORCH_HOME=str(local / "ort-cache/rtmlib"))
-            env.pop("PYTHONPATH", None)
-            env.pop("PYTHONHOME", None)
             with TemporaryDirectory(prefix="SignToCap-poses-") as folder:
                 poses = Path(folder) / "sentence.npz"
-                cmd = [str(python), "-B", str(HERE.parent / "phase2/pose_data.py"), "video",
-                       str(upstream), str(self.server.media[track]), str(poses),
-                       "--start-ms", str(start), "--end-ms", str(end), "--verify-cadence", "--ort-threads", "2"]
                 try:
-                    result = subprocess.run(cmd, env=env, capture_output=True, check=True, timeout=180)
+                    pose_metrics = video_tool("video", pose_stage() / "Uni-Sign", self.server.media[track], poses,
+                                              "--start-ms", start, "--end-ms", end, "--verify-cadence", "--ort-threads", 2)
                 except (subprocess.SubprocessError, OSError):
                     raise ValueError("Could not extract a complete, time-verified sentence from the local video") from None
-                pose_metrics = json.loads(result.stdout.splitlines()[-1])
                 payload = base64.b64encode(poses.read_bytes()).decode("ascii")
             translated = manager.infer(owner, "prerecorded", {"poses": payload, "generation": generation})
             return dict(translated, pose=pose_metrics, reference=segment["reference"])
@@ -348,6 +449,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, {"error": "Use the local app origin"})
         backend = self.server.backend
         manager = self.server.manager
+        if self.path in {"/api/upload-preview", "/api/upload-translate"}:
+            try:
+                return self.upload_video(origin)
+            except (ValueError, TypeError) as error:
+                return self.send(400, {"error": str(error)})
         if not backend and not manager:
             return self.send(409, {"error": "Live backend unavailable. Recorded replay is available."})
         try:

@@ -14,7 +14,10 @@
       <span id="mode-label" class="mode">Recorded replay</span>
     </header>
     <section class="controls" aria-label="Translation controls">
-      <label>Mode <select id="mode"><option value="replay">Recorded replay</option><option value="prerecorded">Prerecorded translation</option><option value="live">Live camera</option><option value="sentence">Sign &amp; Translate</option></select></label>
+      <label>Mode <select id="mode"><option value="replay">Recorded replay</option><option value="prerecorded">Prerecorded translation</option><option value="live">Live camera</option><option value="sentence">Sign &amp; Translate</option><option value="upload">Upload Video &amp; Translate</option></select></label>
+      <label id="sampling-label" hidden>Sampling <select id="sampling"><option value="6">6 FPS</option><option value="12">12 FPS</option><option value="24">24 FPS</option></select></label>
+      <label id="upload-label" hidden>Local video <input id="upload" type="file"></label>
+      <button id="inspect-video" hidden>Inspect video</button>
       <label id="track-label">Recording <select id="track"></select></label>
       <label id="segment-label" hidden>Annotated sentence <select id="segment"></select></label>
       <button id="preview" hidden>Enable camera</button>
@@ -25,6 +28,7 @@
     </section>
     <p id="status" role="status">Loading replay tracks…</p>
     <p id="prerecordedReference" hidden></p>
+    <p id="uploadMeta" role="status" hidden></p>
     <div class="layout">
       <section class="capture" aria-label="Capture preview">
         <video id="recorded" playsinline muted hidden style="transform:none"></video>

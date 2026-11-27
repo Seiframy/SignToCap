@@ -1,6 +1,6 @@
 # SignToCap
 
-SignToCap is a Windows research prototype for turning American Sign Language into English captions. It supports offline replay, complete prerecorded sentences, and a guarded webcam **Sign & Translate** workflow. Translation quality varies. Continuous real-time translation remains experimental.
+SignToCap is a Windows research prototype for turning American Sign Language into English captions. It supports offline replay, local video upload, complete prerecorded sentences, and a guarded webcam **Sign & Translate** workflow. Translation quality varies. Continuous real-time translation remains experimental.
 
 ```powershell
 python -B .\phase3\desktop.py --open

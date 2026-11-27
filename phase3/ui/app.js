@@ -10,6 +10,7 @@ const frameQueue = [];
 const maxQueuedFrames = 6;
 let captureFps = 3, batchSize = 1, sentenceLimit = 0, sentenceClosed = false;
 let sentenceFrames = 0, sentenceGap = false, sentenceBatchTimer;
+let captureBase = null, uploadUrl;
 let frameCallback, commitCutoff, bufferDrops = 0, lastPresentedFrame = -1;
 let gpuRequest = false, gpuError = "", currentOptions = "", refreshingGPU;
 let discoveringGPU = false, discoveryError = "";
@@ -20,6 +21,8 @@ const live = () => ui.mode.value === "live";
 const sentence = () => ui.mode.value === "sentence";
 const camera = () => live() || sentence();
 const prerecorded = () => ui.mode.value === "prerecorded";
+const uploading = () => ui.mode.value === "upload";
+const sampling = () => Number($("sampling").value);
 const say = text => { ui.status.textContent = text; };
 
 async function api(path, body) {
@@ -43,16 +46,21 @@ function render() {
   ui["no-finals"].hidden = finals.length > 0;
   ui.copy.disabled = !finals.length && !partial;
   ui.start.disabled = !capabilities || active || busy ||
-    ((camera() || prerecorded()) && !capabilities.live) ||
+    ((camera() || prerecorded() || uploading()) && !capabilities.live) ||
+    (uploading() && !$("upload").files[0]) ||
     (sentence() && !capabilities.gpu?.runtime?.sentence_frames) ||
     (prerecorded() && (!catalog[ui.track.value]?.available || !$("segment").value));
   ui.stop.disabled = !active || busy;
-  ui.commit.disabled = !camera() || !active || busy || (sentence() && sentenceFrames < 3);
+  ui.commit.disabled = !camera() || !active || busy ||
+    (sentence() && sentenceFrames < Math.ceil(.5 * captureFps));
   ui.mode.disabled = active || busy;
   ui.track.disabled = active || busy;
   $("segment").disabled = active || busy;
+  $("sampling").disabled = active || busy;
+  $("upload").disabled = busy;
+  $("inspect-video").disabled = busy || !capabilities || !$("upload").files[0];
   renderGPU();
-  ui.start.textContent=sentence()?"Start Signing":live()?"Start Live Test":prerecorded()?"Translate sentence":"Play";
+  ui.start.textContent=sentence()?"Start Signing":live()?"Start Live Test":uploading()?"Translate video":prerecorded()?"Translate sentence":"Play";
   ui.commit.textContent=sentence()?"Translate":"Commit sentence";
   ui.stop.textContent=camera()?"End Test and Stop GPU":"Pause";
   if(camera() && !active) $("recordStart").disabled=true;
@@ -76,9 +84,16 @@ function display(event) {
 
 function changeMode() {
   $("recorded").pause();
-  $("recorded").controls = prerecorded();
+  if (!uploading() && uploadUrl) {
+    URL.revokeObjectURL(uploadUrl);
+    uploadUrl = undefined;
+    $("recorded").removeAttribute("src");
+  }
+  $("recorded").controls = prerecorded() || uploading();
   if(camera()) $("recorded").hidden=true;
-  $("replayTools").hidden=camera() || prerecorded();
+  $("replayTools").hidden=camera() || prerecorded() || uploading();
+  $("sampling-label").hidden= !sentence() && !uploading();
+  $("upload-label").hidden=$("inspect-video").hidden=$("uploadMeta").hidden=!uploading();
   $("segment-label").hidden=!prerecorded();
   $("prerecordedReference").hidden=!prerecorded();
   if (!camera() && stream) {
@@ -86,9 +101,9 @@ function changeMode() {
     stream = null;
     ui.video.srcObject = null;
   }
-  ui["mode-label"].textContent = sentence() ? "Sign & Translate" : live() ? "Live camera" : prerecorded() ? "Prerecorded translation" : "Recorded replay";
+  ui["mode-label"].textContent = uploading() ? "Upload Video & Translate" : sentence() ? "Sign & Translate" : live() ? "Live camera" : prerecorded() ? "Prerecorded translation" : "Recorded replay";
   ui["mode-label"].classList.toggle("live", camera());
-  ui["track-label"].hidden = camera();
+  ui["track-label"].hidden = camera() || uploading();
   ui.preview.hidden = !camera();
   ui.video.hidden = !stream;
   ui.empty.hidden = !!stream;
@@ -103,7 +118,12 @@ function changeMode() {
     prerecorded() ? "Choose a complete annotated sentence. Frames are processed at their source cadence." :
     "Recorded model outputs. Camera frames are not used.");
   partial = ""; finals = [];
-  if(prerecorded()) selectPrerecordedTrack();
+  if(uploading()) {
+    ui["empty-title"].textContent = "Local ASL video";
+    ui["empty-text"].textContent = "Select one complete sentence. Inspect the video locally or attach the GPU to translate.";
+    say("Video frames are decoded locally. Only poses are sent to the guarded worker.");
+    showUpload();
+  } else if(prerecorded()) selectPrerecordedTrack();
   else if(!camera()) selectTrack();
   render();
 }
@@ -120,11 +140,75 @@ async function preview() {
 }
 window.addEventListener("pagehide",()=>stream?.getTracks().forEach(track=>track.stop()));
 
-function captureFrame(now, presentedFrame) {
+function showUpload() {
+  if (uploadUrl) URL.revokeObjectURL(uploadUrl);
+  uploadUrl = undefined;
+  const file = $("upload").files[0], video = $("recorded");
+  $("uploadMeta").textContent = "";
+  video.hidden = !file;
+  ui.empty.hidden = !!file;
+  if (file) {
+    video.src = uploadUrl = URL.createObjectURL(file);
+    video.onerror = () => {
+      if (uploading()) {
+        video.hidden = true;
+        ui.empty.hidden = false;
+      }
+    };
+  } else video.removeAttribute("src");
+  render();
+}
+
+async function videoUpload(translate) {
+  const file = $("upload").files[0];
+  const extension = file?.name.match(/\.[a-z0-9]{1,8}$/i)?.[0];
+  if (!extension || !file.size || file.size > 64 * 1024**2) throw Error("Select a video file up to 64 MiB.");
+  const showMetadata = video => {
+    $("uploadMeta").textContent = (video.duration_ms / 1000).toFixed(2) +
+      " s · " + video.source_fps.toFixed(2) + " FPS source";
+  };
+  const response = await fetch("/api/upload-" + (translate ? "translate" : "preview"), {
+    method:"POST", body:file,
+    headers:{"Content-Type":"application/octet-stream", "X-Control":capabilities.token,
+      "X-Session":owner, "X-Video-Extension":extension, "X-Sample-Fps":String(sampling())},
+  });
+  if (!response.ok) throw Error((await response.json()).error);
+  if (!translate) {
+    showMetadata((await response.json()).video);
+    say("Video metadata inspected locally. No model ran.");
+    return;
+  }
+  let complete = false, buffer = "";
+  for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      const message = JSON.parse(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      if (message.error) throw Error(message.error);
+      if (message.stage === "extracting") {
+        showMetadata(message.video);
+        say("Extracting poses locally. Keep this tab open.");
+      } else if (message.stage === "translating") say("Translating the complete pose window with Uni-Sign…");
+      else if (message.stage === "complete") {
+        complete = true;
+        const {pose, event} = message;
+        if (event.kind === "final") finals.push(event.text);
+        $("metrics").textContent = `${pose.frames}/${pose.decoded_frames} decoded frames sampled · ${pose.sample_fps} FPS · ` +
+          `Pose median ${Math.round(pose.pose_p50_ms)} ms · Model ${Math.round(event.work_ms ?? 0)} ms · Total ${Math.round(message.elapsed_ms)} ms`;
+        say(event.kind === "final" ? "Translation complete." : "No valid caption for this sentence.");
+      }
+    }
+  }
+  if (!complete) throw Error("Video processing ended without a result");
+}
+
+function captureFrame(now, presentedFrame, sourceTime = now) {
   if (!active || sentenceClosed || !ui.video.videoWidth || presentedFrame <= lastPresentedFrame) return;
-  const at_ms = now - beginning;
+  if (sentence()) captureBase ??= sourceTime;
+  const at_ms = sentence() ? sourceTime - captureBase : now - beginning;
   if (at_ms < 0 || at_ms >= 60_000) return;
-  const slot = Math.floor(at_ms * captureFps / 1000);
+  const slot = Math.floor((at_ms + .001) * captureFps / 1000);
   if (slot <= lastSlot) return;
   if (sentence() && slot >= sentenceLimit) {
     if (frameCallback !== undefined) ui.video.cancelVideoFrameCallback(frameCallback);
@@ -132,18 +216,23 @@ function captureFrame(now, presentedFrame) {
     frameCallback = undefined;
     sentenceClosed = true;
     sendNextFrame();
-    say("Capture complete. Click Translate.");
+    say(sentenceGap ? "Capture incomplete. End the test and retry at a lower sampling rate." :
+      "Capture complete. Click Translate.");
     render();
     return;
   }
-  if (sentence() && slot !== lastSlot + 1) sentenceGap = true;
+  if (sentence() && slot !== lastSlot + 1 && !sentenceGap) {
+    sentenceGap = true;
+    say("A scheduled camera slot was missing. End the test and retry at a lower sampling rate.");
+  }
   lastSlot = slot;
   lastPresentedFrame = presentedFrame;
-  if (frameQueue.length === maxQueuedFrames) {
+  if (frameQueue.length >= (sentence() ? Math.max(maxQueuedFrames, captureFps / 2) : maxQueuedFrames)) {
     bufferDrops++;
     if (sentence()) {
       sentenceGap = true;
       evidenceEvent({kind:"telemetry", reason:"capture_buffer_overflow", slot});
+      say("The processing queue filled. End the test and retry at a lower sampling rate.");
       return;
     }
     if (commitCutoff !== undefined && frameQueue[0].slot <= commitCutoff) {
@@ -153,34 +242,59 @@ function captureFrame(now, presentedFrame) {
     const discarded = frameQueue.shift();
     evidenceEvent({kind:"telemetry", reason:"capture_buffer_overflow", slot:discarded.slot});
   }
-  canvas.width = Math.min(640, ui.video.videoWidth);
-  canvas.height = Math.round(canvas.width * ui.video.videoHeight / ui.video.videoWidth);
+  const width = Math.min(640, ui.video.videoWidth);
+  const height = Math.round(width * ui.video.videoHeight / ui.video.videoWidth);
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
   const encodeStart = performance.now();
   context.drawImage(ui.video, 0, 0, canvas.width, canvas.height);
-  const jpeg = canvas.toDataURL("image/jpeg", .8).split(",")[1];
-  frameQueue.push({slot, at_ms, captured:now, jpeg, captureEncodeMs:performance.now()-encodeStart});
+  const frame = {slot, at_ms, captured:now};
+  frameQueue.push(frame);
   if (sentence()) {
     sentenceFrames++;
-    if (sentenceFrames === 3) render();
+    if (sentenceFrames === Math.ceil(.5 * captureFps)) render();
+    const generation = epoch;
+    frame.encoding = new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .8)).then(blob => {
+      if (!blob || blob.size > 187_500) throw Error("JPEG exceeds the frame limit");
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }).then(jpeg => {
+      frame.jpeg = jpeg;
+      frame.captureEncodeMs = performance.now() - encodeStart;
+    }).catch(() => {
+      if (epoch === generation) {
+        sentenceGap = true;
+        say("A camera frame could not be encoded. End the test and retry.");
+      }
+    }).finally(() => {
+      if (epoch === generation) sendNextFrame();
+    });
+  } else {
+    frame.jpeg = canvas.toDataURL("image/jpeg", .8).split(",")[1];
+    frame.captureEncodeMs = performance.now() - encodeStart;
   }
   sendNextFrame();
 }
 
 function sendNextFrame(flush = false) {
   if (pending || !active || !frameQueue.length || (sentence() && sentenceGap)) return;
-  if (sentence() && !sentenceClosed && !flush && frameQueue.length < batchSize) {
+  let count = 0;
+  while (count < batchSize && frameQueue[count]?.jpeg &&
+         (commitCutoff === undefined || frameQueue[count].slot <= commitCutoff)) count++;
+  if (!count) return;
+  if (sentence() && !sentenceClosed && !flush && count < batchSize) {
     sentenceBatchTimer ??= setTimeout(() => {
       sentenceBatchTimer = undefined;
       sendNextFrame(true);
-    }, 185);
+    }, 1.1 * 1000 / captureFps);
     return;
   }
   clearTimeout(sentenceBatchTimer);
   sentenceBatchTimer = undefined;
-  let count = 0;
-  while (count < batchSize && count < frameQueue.length &&
-         (commitCutoff === undefined || frameQueue[count].slot <= commitCutoff)) count++;
-  if (!count) return;
   const frames = frameQueue.splice(0, count);
   const generation = epoch;
   pending = deliverFrames(frames, generation).catch(async error => {
@@ -219,7 +333,8 @@ function beginCapture() {
   if (ui.video.requestVideoFrameCallback) {
     function next(now, frame) {
       if (!active || !camera() || sentenceClosed) return;
-      captureFrame(frame.presentationTime ?? now, frame.presentedFrames);
+      const wall = frame.presentationTime ?? now;
+      captureFrame(wall, frame.presentedFrames, Number.isFinite(frame.mediaTime) ? frame.mediaTime * 1000 : wall);
       if (active && !sentenceClosed) frameCallback = ui.video.requestVideoFrameCallback(next);
     }
     frameCallback = ui.video.requestVideoFrameCallback(next);
@@ -237,7 +352,9 @@ function selectTrack() {
   $("seek").max=duration;
   video.hidden=!entry?.available; ui.empty.hidden=!!entry?.available;
   if(entry?.available) {video.src="/media/"+encodeURIComponent(name); video.currentTime=entry.source.source_start_ms/1000;}
-  else ui["empty-text"].textContent="Original footage unavailable locally. Caption timeline only.";
+  else ui["empty-text"].textContent=name === "Illustrative caption replay" ?
+    "Illustrative caption timeline. No model runs in this mode." :
+    "Original footage unavailable locally. Caption timeline only.";
   paintReplay();
 }
 
@@ -296,6 +413,13 @@ async function start() {
   busy = true;
   render();
   try {
+    if (uploading()) {
+      partial = "";
+      finals = [];
+      say("Sending the selected file to the local decoder…");
+      await videoUpload(true);
+      return;
+    }
     if (prerecorded()) {
       partial = "";
       finals = [];
@@ -314,12 +438,18 @@ async function start() {
       if (!ui.video.requestVideoFrameCallback && !ui.video.getVideoPlaybackQuality) {
         throw Error("This browser cannot identify distinct camera frames");
       }
-      const session = await api("start", {mode:sentence()?"sentence":"live"});
+      const rate = sentence() ? sampling() : undefined;
+      const supported = capabilities.gpu?.runtime?.sentence_rates ?? [6];
+      if (sentence() && !supported.includes(rate)) throw Error("This worker does not support the selected rate. Reattach with the upgraded worker.");
+      if (sentence() && rate > 6 && !ui.video.requestVideoFrameCallback) {
+        throw Error("Higher sampling rates need a browser with video-frame callbacks");
+      }
+      const session = await api("start", {mode:sentence()?"sentence":"live", sample_fps:rate});
       const runtime = session.runtime ?? {};
       batchSize = runtime.batch_frames === 3 ? 3 : 1;
-      captureFps = sentence() ? runtime.sentence_fps : capabilities.fps;
-      sentenceLimit = sentence() ? runtime.sentence_frames : 0;
-      if (sentence() && (captureFps !== 6 || sentenceLimit !== 48 || batchSize !== 3)) {
+      captureFps = sentence() ? session.capture_fps ?? runtime.sentence_fps : capabilities.fps;
+      sentenceLimit = sentence() ? captureFps * 8 : 0;
+      if (sentence() && (captureFps !== rate || batchSize !== 3)) {
         throw Error("This worker does not support Sign & Translate");
       }
       sentenceClosed = false;
@@ -335,12 +465,14 @@ async function start() {
       lastSlot = -1;
       lastPresentedFrame = -1;
       bufferDrops = 0;
+      captureBase = null;
       frameQueue.length = 0;
       say(sentence() ? "Sign one sentence within 8 seconds, then click Translate." :
         "Live capture running. Commit each completed sentence.");
     } else {
       await runReplay();
-      say("Playing recorded model output.");
+      say(ui.track.value === "Illustrative caption replay" ?
+        "Playing the illustrative caption timeline." : "Playing recorded model output.");
     }
     epoch++;
     if(camera()) {partial = ""; finals = [];}
@@ -366,6 +498,9 @@ async function control(action) {
     if (sentence() && action === "commit") {
       sentenceClosed = true;
       evidenceEvent({kind:"telemetry", reason:"sentence_translate_requested", frames:sentenceFrames});
+      const generation = epoch;
+      await Promise.all(frameQueue.map(frame => frame.encoding));
+      if (!active || epoch !== generation) return;
       if (sentenceGap) {
         const event = {kind:"uncertain", reason:"capture_gap"};
         evidenceEvent(event);
@@ -374,7 +509,6 @@ async function control(action) {
         return;
       }
       say("Translating your complete sentence…");
-      const generation = epoch;
       sendNextFrame(true);
       while (pending && epoch === generation) await pending;
       if (!active || epoch !== generation) return;
@@ -409,6 +543,15 @@ async function control(action) {
 }
 
 ui.mode.addEventListener("change", changeMode);
+$("upload").onchange = showUpload;
+$("inspect-video").onclick = async () => {
+  busy = true;
+  render();
+  say("Inspecting the selected video locally…");
+  try { await videoUpload(false); }
+  catch (error) { say(error.message); }
+  finally { busy = false; render(); }
+};
 ui.track.onchange=()=>prerecorded()?selectPrerecordedTrack():selectTrack();
 $("segment").onchange=()=>{
   const entry=catalog[ui.track.value], selected=$("segment").value;
@@ -624,7 +767,7 @@ $("gpuStart").onclick=()=>{
 Total ${money(total)}/hour, including ${money(storageRate(row))}/hour for the container disk.
 Ceiling ${money(ceiling)}/hour. The shared network volume is billed separately.
 Shutdown begins before 15 minutes from the actual Pod start.`)) return;
-  if (!prerecorded() && !sentence()) {
+  if (!prerecorded() && !sentence() && !uploading()) {
     ui.mode.value = "live";
     changeMode();
   }
