@@ -1,0 +1,4 @@
+{"kind":"partial","id":"Illustrative caption replay","emit_ms":700,"text":"Welcome"}
+{"kind":"final","id":"Illustrative caption replay","emit_ms":1800,"text":"Welcome to the SignToCap replay demo."}
+{"kind":"partial","id":"Illustrative caption replay","emit_ms":2800,"text":"The captions appear"}
+{"kind":"final","id":"Illustrative caption replay","emit_ms":4200,"text":"The captions appear as the replay advances."}

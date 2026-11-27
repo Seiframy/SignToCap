@@ -1,0 +1,31 @@
+diff --git a/datasets.py b/datasets.py
+--- a/datasets.py
++++ b/datasets.py
+@@ -1,5 +1,4 @@
+ import torch
+-import utils as utils
+ import torch.utils.data.dataset as Dataset
+ from torch.nn.utils.rnn import pad_sequence
+ from PIL import Image
+@@ -9,6 +8,5 @@
+ import copy
+ import pickle
+-from decord import VideoReader, cpu
+ import json
+ import pathlib
+ from torchvision import transforms
+@@ -324,3 +322,5 @@
+ # use split rgb video for save time
+ def load_video_support_rgb(path, tmp):
++    from decord import VideoReader, cpu
++
+     vr = VideoReader(path, num_threads=1, ctx=cpu(0))
+@@ -409,6 +409,8 @@
+         self.args = args
+         self.rgb_support = self.args.rgb_support
+         self.max_length = args.max_length
++        import utils
++
+         self.raw_data = utils.load_dataset_file(path)
+         self.phase = phase
+ 

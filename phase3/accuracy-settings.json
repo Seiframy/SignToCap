@@ -1,0 +1,13 @@
+{
+  "seed": 42,
+  "train_limit": 64,
+  "validation_limit": 12,
+  "train_min": 16,
+  "validation_min": 4,
+  "per_source_limit": 8,
+  "optimizer_steps": 8,
+  "accumulation": 4,
+  "validation_interval": 4,
+  "learning_rate": 0.0002,
+  "weight_decay": 0.01
+}
